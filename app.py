@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from pathlib import Path
 
 import streamlit as st
 
@@ -18,6 +19,8 @@ from vilm2ccg.input_module import parse_vietnamese_prompt
 from vilm2ccg.visualizer import visualize_circuit
 from vilm2ccg.hdl_generator import generate_verilog
 from vilm2ccg.verification import run_verification, compute_truth_table
+
+_MODELS_DIR = Path(__file__).parent / "models"
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -38,25 +41,62 @@ with st.sidebar:
     st.title("⚙️ Cài đặt / Settings")
     st.markdown("---")
 
-    st.markdown("#### 🖥️ LM Studio (local)")
-    lm_studio_url = st.text_input(
-        "LM Studio URL",
-        value=os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1"),
-        help="Địa chỉ server LM Studio. Mặc định: http://localhost:1234/v1",
-    )
-    lm_studio_model = st.text_input(
-        "Model name",
-        value=os.getenv("LM_STUDIO_MODEL", "local-model"),
+    st.markdown("#### 🔌 Backend")
+    backend = st.radio(
+        "Chọn backend / Select backend:",
+        options=["Rule-based", "Local Model (seq2seq)", "LM Studio"],
+        index=0,
         help=(
-            "Tên model đang chạy trong LM Studio. "
-            "Dùng 'local-model' nếu chỉ có một model được load."
+            "Rule-based: dùng engine tổ hợp xác định.\n"
+            "Local Model: dùng model seq2seq đã train từ models/.\n"
+            "LM Studio: gửi prompt tới LM Studio server."
         ),
     )
-    use_lm_studio = st.checkbox(
-        "Sử dụng LM Studio",
-        value=False,
-        help="Bật để gửi prompt tới LM Studio. Tắt để dùng rule-based engine.",
-    )
+
+    # -- Local Model settings -----------------------------------------------
+    local_model_dir = None
+    if backend == "Local Model (seq2seq)":
+        st.markdown("#### 🧠 Local Model")
+        available_models: list[str] = []
+        if _MODELS_DIR.exists():
+            available_models = [
+                d.name
+                for d in sorted(_MODELS_DIR.iterdir())
+                if d.is_dir() and (d / "model.pt").exists()
+            ]
+        if available_models:
+            selected_model = st.selectbox(
+                "Chọn checkpoint / Select checkpoint:",
+                options=available_models,
+                help=f"Các checkpoint trong thư mục {_MODELS_DIR}",
+            )
+            local_model_dir = str(_MODELS_DIR / selected_model)
+            st.success(f"✅ Checkpoint: `{selected_model}`")
+        else:
+            st.warning(
+                f"⚠️ Chưa có model trong `models/`. "
+                "Hãy train trước:\n```\npython train.py --epochs 1\n```"
+            )
+            local_model_dir = str(_MODELS_DIR / "vilm2ccg-t5")
+
+    # -- LM Studio settings -------------------------------------------------
+    lm_studio_url = ""
+    lm_studio_model = ""
+    if backend == "LM Studio":
+        st.markdown("#### 🖥️ LM Studio")
+        lm_studio_url = st.text_input(
+            "LM Studio URL",
+            value=os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1"),
+            help="Địa chỉ server LM Studio. Mặc định: http://localhost:1234/v1",
+        )
+        lm_studio_model = st.text_input(
+            "Model name",
+            value=os.getenv("LM_STUDIO_MODEL", "local-model"),
+            help=(
+                "Tên model đang chạy trong LM Studio. "
+                "Dùng 'local-model' nếu chỉ có một model được load."
+            ),
+        )
 
     st.markdown("---")
     st.markdown("**Ví dụ prompts / Example prompts:**")
@@ -106,13 +146,23 @@ if run_btn and prompt.strip():
         # 1. Parse intent
         intent = parse_vietnamese_prompt(prompt)
 
-        # 2. Build circuit (LM Studio or rule-based)
-        llm = LLMInterface(
-            base_url=lm_studio_url,
-            model=lm_studio_model,
-            use_fallback=not use_lm_studio,
-        )
-        circuit = llm.generate_circuit(prompt)
+        # 2. Build circuit based on selected backend
+        if backend == "Local Model (seq2seq)":
+            from inference import ViLM2CCGInference
+            from vilm2ccg.circuit_json import CircuitJSON
+            engine = ViLM2CCGInference(model_dir=local_model_dir)
+            circuit_dict = engine.generate_circuit_dict(prompt)
+            circuit = CircuitJSON.from_dict(circuit_dict)
+        elif backend == "LM Studio":
+            llm = LLMInterface(
+                base_url=lm_studio_url,
+                model=lm_studio_model,
+                use_fallback=False,
+            )
+            circuit = llm.generate_circuit(prompt)
+        else:
+            llm = LLMInterface(use_fallback=True)
+            circuit = llm.generate_circuit(prompt)
 
         # 3. Generate Verilog
         verilog_code = generate_verilog(circuit)
