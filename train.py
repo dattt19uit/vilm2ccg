@@ -12,10 +12,20 @@ time by the existing rule-based HDL generator).
 Architecture (defaults): d_model=256, nhead=8, 2+2 layers, FFN=1024 ≈ 3.8 M params
 Training: teacher-forcing cross-entropy, AdamW, linear warmup.
 
+GPU support
+-----------
+The script automatically detects GPUs and uses them when available.
+
+  --gpus 0        # CPU only (override auto-detection)
+  --gpus 1        # single GPU (default when 1 GPU present)
+  --gpus 2        # 2-GPU DataParallel (requires ≥ 2 CUDA devices)
+
 Usage
 -----
-    python train.py                        # 1 epoch (default)
+    python train.py                             # 1 epoch (default)
     python train.py --epochs 3 --batch 8
+    python train.py --gpus 1                    # single GPU
+    python train.py --gpus 2 --batch 16        # 2x GPU DataParallel
     python train.py --output models/my_run
 
 Checkpoint saved to ``models/vilm2ccg-t5/`` (model.pt, vocab.json, config.json).
@@ -208,7 +218,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output",     default=str(_DEFAULT_OUTPUT),
                    help="Checkpoint directory (default: models/vilm2ccg-t5)")
     p.add_argument("--epochs",     type=int,   default=1,    help="Training epochs (default: 1)")
-    p.add_argument("--batch",      type=int,   default=4,    help="Batch size (default: 4)")
+    p.add_argument("--batch",      type=int,   default=4,    help="Batch size per device (default: 4)")
     p.add_argument("--lr",         type=float, default=1e-3, help="Peak learning rate (default: 1e-3)")
     p.add_argument("--max-src",    type=int,   default=256,  help="Max source token length")
     p.add_argument("--max-tgt",    type=int,   default=1024, help="Max target token length")
@@ -216,6 +226,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--nhead",      type=int,   default=8,    help="Attention heads")
     p.add_argument("--enc-layers", type=int,   default=2,    help="Encoder layers")
     p.add_argument("--dec-layers", type=int,   default=2,    help="Decoder layers")
+    p.add_argument("--gpus",       type=int,   default=-1,
+                   help="Number of GPUs to use: 0=CPU, 1=single GPU, 2=DataParallel 2×GPU. "
+                        "Default: auto-detect (use all available GPUs up to 2).")
     return p.parse_args()
 
 
@@ -229,8 +242,33 @@ def main() -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device : {device}")
+    # ------------------------------------------------------------------
+    # Device / GPU selection
+    # ------------------------------------------------------------------
+    n_cuda = torch.cuda.device_count()
+    requested_gpus = args.gpus if args.gpus >= 0 else min(n_cuda, 2)
+    requested_gpus = min(requested_gpus, n_cuda)  # can't use more than available
+
+    if requested_gpus == 0 or n_cuda == 0:
+        device = torch.device("cpu")
+        use_data_parallel = False
+    elif requested_gpus == 1:
+        device = torch.device("cuda:0")
+        use_data_parallel = False
+    else:  # 2+
+        device = torch.device("cuda:0")
+        use_data_parallel = True
+
+    # Effective batch size = batch * num_gpus
+    effective_batch = args.batch * max(1, requested_gpus)
+
+    gpu_info = (
+        f"CPU" if device.type == "cpu"
+        else f"GPU×{requested_gpus} (DataParallel)" if use_data_parallel
+        else "GPU×1"
+    )
+    print(f"Device : {gpu_info}")
+    print(f"Batch  : {args.batch} per device × {max(1, requested_gpus)} = {effective_batch} total")
     print(f"Output : {output_dir}")
 
     # 1. Data
@@ -246,27 +284,37 @@ def main() -> None:
     tokenizer.save(output_dir / "vocab.json")
     print(f"  Vocabulary size: {tokenizer.vocab_size}")
 
-    # 3. DataLoaders
+    # 3. DataLoaders (use effective batch for the loader)
     collate_fn = functools.partial(_collate, pad_id=tokenizer.pad_id)
     train_dl = DataLoader(
         Seq2SeqDataset(train_pairs, tokenizer, args.max_src, args.max_tgt),
-        batch_size=args.batch, shuffle=True, collate_fn=collate_fn,
+        batch_size=effective_batch, shuffle=True, collate_fn=collate_fn,
+        num_workers=0, pin_memory=(device.type == "cuda"),
     )
     val_dl = DataLoader(
         Seq2SeqDataset(val_pairs, tokenizer, args.max_src, args.max_tgt),
-        batch_size=args.batch, shuffle=False, collate_fn=collate_fn,
+        batch_size=effective_batch, shuffle=False, collate_fn=collate_fn,
+        num_workers=0, pin_memory=(device.type == "cuda"),
     )
 
     # 4. Model
     print("[3/5] Building model…")
-    model = CircuitSeq2Seq(
+    base_model = CircuitSeq2Seq(
         vocab_size=tokenizer.vocab_size,
         d_model=args.d_model,
         nhead=args.nhead,
         num_encoder_layers=args.enc_layers,
         num_decoder_layers=args.dec_layers,
     ).to(device)
-    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    if use_data_parallel:
+        gpu_ids = list(range(requested_gpus))
+        model: nn.Module = nn.DataParallel(base_model, device_ids=gpu_ids)
+        print(f"  DataParallel across GPU ids: {gpu_ids}")
+    else:
+        model = base_model
+
+    n_params = sum(p.numel() for p in base_model.parameters() if p.requires_grad)
     print(f"  Trainable parameters: {n_params:,}")
 
     # Save architecture config
@@ -306,7 +354,13 @@ def main() -> None:
         print(f"  train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  ({time.time()-t0:.1f}s)")
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), output_dir / "model.pt")
+            # Unwrap DataParallel before saving so inference.py loads cleanly
+            state_dict = (
+                model.module.state_dict()
+                if isinstance(model, nn.DataParallel)
+                else model.state_dict()
+            )
+            torch.save(state_dict, output_dir / "model.pt")
             print(f"  ✓ Saved best model (val_loss={val_loss:.4f})")
 
     print(f"\n[5/5] Done. Best val_loss: {best_val_loss:.4f}")
