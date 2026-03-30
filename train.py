@@ -233,6 +233,37 @@ def parse_args() -> argparse.Namespace:
 
 
 # ---------------------------------------------------------------------------
+# GPU usability probe
+# ---------------------------------------------------------------------------
+
+
+def _count_usable_gpus() -> int:
+    """Return the number of CUDA devices that can actually execute tensor ops.
+
+    ``torch.cuda.is_available()`` / ``device_count()`` may return True/> 0
+    even for GPUs whose compute capability is below the minimum supported by
+    the installed PyTorch build (e.g. sm_60 P100 on a PyTorch ≥ 2.0 wheel
+    that requires sm_70+).  A lightweight test operation catches that case.
+    """
+    n = torch.cuda.device_count()
+    if n == 0:
+        return 0
+    usable = 0
+    for i in range(n):
+        try:
+            t = torch.tensor([1.0], device=f"cuda:{i}")
+            _ = t + t          # triggers the actual CUDA kernel
+            usable += 1
+        except Exception:
+            print(
+                f"  ⚠️  GPU {i} ({torch.cuda.get_device_name(i)}) is not usable "
+                f"with this PyTorch build – falling back to CPU for that device.",
+                flush=True,
+            )
+    return usable
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -245,7 +276,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Device / GPU selection
     # ------------------------------------------------------------------
-    n_cuda = torch.cuda.device_count()
+    n_cuda = _count_usable_gpus()
     requested_gpus = args.gpus if args.gpus >= 0 else min(n_cuda, 2)
     requested_gpus = min(requested_gpus, n_cuda)  # can't use more than available
 
