@@ -20,6 +20,15 @@ The script automatically detects GPUs and uses them when available.
   --gpus 1        # single GPU (default when 1 GPU present)
   --gpus 2        # 2-GPU DataParallel (requires ≥ 2 CUDA devices)
 
+Kaggle / Colab with Tesla P100 (sm_60)
+    The default PyTorch on recent Kaggle images (≥ 2.0) requires sm_70+,
+    so P100 falls back to CPU.  To enable the GPU, run once in a notebook cell:
+
+        !pip install torch==1.13.1+cu116 torchvision==0.13.1+cu116 \\
+            --extra-index-url https://download.pytorch.org/whl/cu116
+
+    Then restart the kernel and re-run train.py.
+
 Usage
 -----
     python train.py                             # 1 epoch (default)
@@ -255,9 +264,18 @@ def _count_usable_gpus() -> int:
             _ = t + t          # triggers the actual CUDA kernel
             usable += 1
         except Exception:
+            name = torch.cuda.get_device_name(i)
+            cap = torch.cuda.get_device_capability(i)
+            sm = f"sm_{cap[0]}{cap[1]}"
             print(
-                f"  ⚠️  GPU {i} ({torch.cuda.get_device_name(i)}) is not usable "
-                f"with this PyTorch build – falling back to CPU for that device.",
+                f"\n  ⚠️  GPU {i} ({name}, {sm}) is not supported by the current "
+                f"PyTorch build and will be skipped.\n"
+                f"\n"
+                f"  To use this GPU on Kaggle / Colab, install a compatible PyTorch:\n"
+                f"    pip install torch==1.13.1+cu116 torchvision==0.13.1+cu116 \\\n"
+                f"        --extra-index-url https://download.pytorch.org/whl/cu116\n"
+                f"\n"
+                f"  Training will continue on CPU (slower but correct).\n",
                 flush=True,
             )
     return usable
