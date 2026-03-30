@@ -147,12 +147,14 @@ if run_btn and prompt.strip():
         intent = parse_vietnamese_prompt(prompt)
 
         # 2. Build circuit based on selected backend
+        _model_source: str = "rule-based"
         if backend == "Local Model (seq2seq)":
             from inference import ViLM2CCGInference
             from vilm2ccg.circuit_json import CircuitJSON
             engine = ViLM2CCGInference(model_dir=local_model_dir)
             circuit_dict = engine.generate_circuit_dict(prompt)
             circuit = CircuitJSON.from_dict(circuit_dict)
+            _model_source = engine.last_source  # "model" or "fallback"
         elif backend == "LM Studio":
             llm = LLMInterface(
                 base_url=lm_studio_url,
@@ -194,6 +196,15 @@ if run_btn and prompt.strip():
     # ------------------------------------------------------------------
 
     st.success(f"✅ Đã tạo mạch: **{circuit.circuit_name}**")
+    if backend == "Local Model (seq2seq)":
+        if _model_source == "model":
+            st.info("🤖 Kết quả từ seq2seq model.")
+        else:
+            st.warning(
+                "⚠️ Model chưa sinh được JSON hợp lệ (cần train thêm epoch). "
+                "Mạch được tạo bằng rule-based fallback.\n\n"
+                "Để cải thiện: `python train.py --epochs 10`"
+            )
 
     tab1, tab2, tab3, tab4, tab5 = st.tabs(
         ["🔍 Phân tích / Analysis", "🖼️ Sơ đồ / Graph", "💾 Verilog", "📊 Bảng chân lý / Truth Table", "✅ Kiểm tra / Verification"]

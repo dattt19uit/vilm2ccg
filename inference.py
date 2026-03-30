@@ -127,6 +127,7 @@ class ViLM2CCGInference:
         self.max_new_tokens = max_new_tokens
         self.beam_width = beam_width
         self.model_available = False
+        self.last_source = "fallback"
         model_dir = Path(model_dir)
 
         if not model_dir.exists():
@@ -179,15 +180,19 @@ class ViLM2CCGInference:
         return self.tokenizer.decode(out_ids)
 
     def generate_circuit_dict(self, prompt: str) -> dict[str, Any]:
-        """Return a complete CircuitJSON dict (with verilog)."""
+        """Return a complete CircuitJSON dict (with verilog).
+
+        Sets ``self.last_source`` to ``"model"`` when the model output is valid
+        JSON, or ``"fallback"`` when the rule-based engine is used.
+        """
         raw = self.generate_raw(prompt)
         if raw:
             parsed = _try_parse_json(raw)
             if parsed is not None:
+                self.last_source = "model"
                 return _fill_verilog(parsed, prompt)
         # Fallback
-        if raw:
-            print("⚠️  Model output is not valid JSON – using rule-based fallback.", file=sys.stderr)
+        self.last_source = "fallback"
         return _fallback_circuit(prompt)
 
     def generate(self, prompt: str) -> str:
@@ -302,7 +307,7 @@ def main() -> None:
         d = json.loads(result)
         meta  = d.get("metadata", {})
         graph = d.get("graph", {})
-        src   = "model" if engine.model_available else "rule-based fallback"
+        src   = engine.last_source
         print(f"  source      : {src}")
         print(f"  id          : {d.get('id', '')}")
         print(f"  circuit_type: {meta.get('circuit_type', '')}")
