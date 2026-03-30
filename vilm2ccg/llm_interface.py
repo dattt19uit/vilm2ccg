@@ -49,20 +49,31 @@ Hãy thực hiện theo các bước sau (Chain-of-Thought):
 1. Xác định loại mạch và số lượng đầu vào/đầu ra.
 2. Liệt kê tất cả các cổng logic cần thiết.
 3. Mô tả kết nối giữa các cổng.
-4. Xuất ra CircuitJSON hợp lệ.
+4. Sinh mã Verilog tương ứng.
+5. Xuất ra CircuitJSON hợp lệ theo định dạng dưới đây.
 
 CircuitJSON format:
 {
-  "circuit_name": "<tên mạch>",
-  "description": "<mô tả>",
-  "circuit_type": "<loại>",
-  "nodes": [
-    {"id": "<id>", "type": "<input|output|and|or|not|nand|nor|xor|xnor|mux|buf>",
-     "name": "<tên>", "width": 1, "num_inputs": <n>}
-  ],
-  "edges": [
-    {"from": "<id>", "to": "<id>", "from_port": 0, "to_port": 0, "name": "<net>"}
-  ]
+  "id": "<tên mạch>",
+  "input_text": "<mô tả tiếng Việt>",
+  "graph": {
+    "nodes": [
+      {"id": "<id>", "type": "<input|output|and|or|not|nand|nor|xor|xnor|mux|buf>",
+       "name": "<tên>", "width": 1, "num_inputs": <n>}
+    ],
+    "edges": [
+      {"source": "<id nguồn>", "target": "<id đích>", "from_port": 0, "to_port": 0, "name": "<net>"}
+    ]
+  },
+  "verilog": "<mã Verilog>",
+  "metadata": {
+    "num_inputs": <số đầu vào>,
+    "num_outputs": <số đầu ra>,
+    "num_gates": <số cổng>,
+    "circuit_name": "<tên mạch>",
+    "circuit_type": "<loại mạch>",
+    "description": "<mô tả>"
+  }
 }
 
 Chỉ trả về JSON, không có giải thích thêm.

@@ -5,6 +5,28 @@ CircuitJSON is the intermediate representation used throughout ViLM2CCG.
 It describes a combinational circuit as a directed graph with:
   - nodes: gates (AND, OR, NOT, …) and I/O ports
   - edges: wires connecting node ports
+
+Serialization format
+--------------------
+::
+
+    {
+      "id": "<circuit-id>",
+      "input_text": "<Vietnamese NL description>",
+      "graph": {
+        "nodes": [{"id": "...", "type": "...", "name": "...", ...}],
+        "edges": [{"source": "...", "target": "...", "name": "...", ...}]
+      },
+      "verilog": "<Verilog source>",
+      "metadata": {
+        "num_inputs": <int>,
+        "num_outputs": <int>,
+        "num_gates": <int>,
+        "circuit_name": "...",
+        "circuit_type": "...",
+        "description": "..."
+      }
+    }
 """
 
 from __future__ import annotations
@@ -60,7 +82,7 @@ class CircuitNode:
         return cls(
             id=d["id"],
             type=d["type"],
-            name=d["name"],
+            name=d.get("name", d["id"]),
             width=d.get("width", 1),
             num_inputs=d.get("num_inputs", 2),
             metadata=d.get("metadata", {}),
@@ -79,8 +101,8 @@ class CircuitEdge:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "from": self.from_node,
-            "to": self.to_node,
+            "source": self.from_node,
+            "target": self.to_node,
             "from_port": self.from_port,
             "to_port": self.to_port,
             "name": self.name,
@@ -88,9 +110,13 @@ class CircuitEdge:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CircuitEdge":
+        # Accept both new-format keys ("source"/"target") and
+        # legacy keys ("from"/"to") for backward compatibility.
+        from_node = d.get("source") or d.get("from", "")
+        to_node = d.get("target") or d.get("to", "")
         return cls(
-            from_node=d["from"],
-            to_node=d["to"],
+            from_node=from_node,
+            to_node=to_node,
             from_port=d.get("from_port", 0),
             to_port=d.get("to_port", 0),
             name=d.get("name", ""),
@@ -110,10 +136,18 @@ class CircuitJSON:
         circuit_name: str = "circuit",
         description: str = "",
         circuit_type: str = "custom",
+        id: str = "",
+        input_text: str = "",
+        verilog: str = "",
     ) -> None:
         self.circuit_name = circuit_name
         self.description = description
         self.circuit_type = circuit_type  # e.g. "and", "mux", "half_adder", …
+        # Public-facing ID and NL description (used in dataset / serialization)
+        self.id = id or circuit_name
+        self.input_text = input_text or description
+        # Optional embedded Verilog (populated by hdl_generator when needed)
+        self.verilog = verilog
         self.nodes: list[CircuitNode] = []
         self.edges: list[CircuitEdge] = []
 
@@ -141,12 +175,23 @@ class CircuitJSON:
     # ------------------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise to the canonical CircuitJSON schema."""
         return {
-            "circuit_name": self.circuit_name,
-            "description": self.description,
-            "circuit_type": self.circuit_type,
-            "nodes": [n.to_dict() for n in self.nodes],
-            "edges": [e.to_dict() for e in self.edges],
+            "id": self.id or self.circuit_name,
+            "input_text": self.input_text or self.description,
+            "graph": {
+                "nodes": [n.to_dict() for n in self.nodes],
+                "edges": [e.to_dict() for e in self.edges],
+            },
+            "verilog": self.verilog,
+            "metadata": {
+                "num_inputs": len(self.get_inputs()),
+                "num_outputs": len(self.get_outputs()),
+                "num_gates": len(self.get_gates()),
+                "circuit_name": self.circuit_name,
+                "circuit_type": self.circuit_type,
+                "description": self.description,
+            },
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -154,15 +199,34 @@ class CircuitJSON:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CircuitJSON":
-        cj = cls(
-            circuit_name=d.get("circuit_name", "circuit"),
-            description=d.get("description", ""),
-            circuit_type=d.get("circuit_type", "custom"),
-        )
-        for nd in d.get("nodes", []):
-            cj.add_node(CircuitNode.from_dict(nd))
-        for ed in d.get("edges", []):
-            cj.add_edge(CircuitEdge.from_dict(ed))
+        """Deserialise from the canonical schema or the legacy schema."""
+        if "graph" in d:
+            # ── New canonical format ──────────────────────────────────
+            meta = d.get("metadata", {})
+            cj = cls(
+                circuit_name=meta.get("circuit_name", d.get("id", "circuit")),
+                description=meta.get("description", d.get("input_text", "")),
+                circuit_type=meta.get("circuit_type", "custom"),
+                id=d.get("id", ""),
+                input_text=d.get("input_text", ""),
+                verilog=d.get("verilog", ""),
+            )
+            graph = d.get("graph", {})
+            for nd in graph.get("nodes", []):
+                cj.add_node(CircuitNode.from_dict(nd))
+            for ed in graph.get("edges", []):
+                cj.add_edge(CircuitEdge.from_dict(ed))
+        else:
+            # ── Legacy format (circuit_name / nodes / edges at top level) ──
+            cj = cls(
+                circuit_name=d.get("circuit_name", "circuit"),
+                description=d.get("description", ""),
+                circuit_type=d.get("circuit_type", "custom"),
+            )
+            for nd in d.get("nodes", []):
+                cj.add_node(CircuitNode.from_dict(nd))
+            for ed in d.get("edges", []):
+                cj.add_edge(CircuitEdge.from_dict(ed))
         return cj
 
     @classmethod

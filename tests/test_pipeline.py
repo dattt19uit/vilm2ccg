@@ -107,6 +107,31 @@ class TestCircuitJSON:
         assert len(restored.nodes) == 2
         assert len(restored.edges) == 1
 
+    def test_serialize_new_schema_keys(self):
+        cj = CircuitJSON(circuit_name="and_2in", description="AND gate", circuit_type="and")
+        cj.add_node(CircuitNode(id="in_0", type="input", name="A"))
+        cj.add_node(CircuitNode(id="out_0", type="output", name="Y"))
+        cj.add_edge(CircuitEdge(from_node="in_0", to_node="out_0", name="w"))
+
+        d = cj.to_dict()
+        # Top-level keys
+        assert "id" in d
+        assert "input_text" in d
+        assert "graph" in d
+        assert "verilog" in d
+        assert "metadata" in d
+        # Graph sub-keys
+        assert "nodes" in d["graph"]
+        assert "edges" in d["graph"]
+        # Edge keys use source/target
+        edge = d["graph"]["edges"][0]
+        assert "source" in edge
+        assert "target" in edge
+        # Metadata stats
+        assert d["metadata"]["num_inputs"] == 1
+        assert d["metadata"]["num_outputs"] == 1
+        assert d["metadata"]["num_gates"] == 0
+
     def test_get_inputs_outputs(self):
         cj = CircuitJSON()
         cj.add_node(CircuitNode(id="i0", type="input", name="A"))

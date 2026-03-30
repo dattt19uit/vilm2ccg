@@ -55,6 +55,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from vilm2ccg.input_module import parse_vietnamese_prompt          # noqa: E402
 from vilm2ccg.llm_interface import build_circuit_from_intent       # noqa: E402
 from vilm2ccg.circuit_json import CircuitJSON                      # noqa: E402
+from vilm2ccg.hdl_generator import generate_verilog               # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +335,6 @@ def _circuit_to_pretty_json(circuit: CircuitJSON) -> str:
     """Return an indented JSON string for the circuit."""
     return json.dumps(circuit.to_dict(), ensure_ascii=False, indent=2)
 
-
 def generate_examples() -> Iterator[dict]:
     """Yield one dataset example per template entry."""
     for template, circuit_type, params in _TEMPLATES:
@@ -352,6 +352,12 @@ def generate_examples() -> Iterator[dict]:
             circuit = build_circuit_from_intent(intent)
         except Exception:
             continue
+
+        # Set the public-facing id and input_text to match the new schema
+        circuit.id = circuit.circuit_name
+        circuit.input_text = prompt
+        # Embed Verilog in the JSON
+        circuit.verilog = generate_verilog(circuit)
 
         output_json = _circuit_to_pretty_json(circuit)
 
