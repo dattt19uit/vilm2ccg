@@ -171,10 +171,23 @@ if run_btn and prompt.strip():
         img_bytes = visualize_circuit(circuit, fmt="png")
 
         # 5. Verification
-        ver_result = run_verification(circuit)
+        try:
+            ver_result = run_verification(circuit)
+        except Exception as _ver_exc:
+            from vilm2ccg.verification import VerificationResult
+            ver_result = VerificationResult(
+                passed=False,
+                errors=-1,
+                stdout="",
+                stderr=str(_ver_exc),
+                iverilog_available=False,
+            )
 
         # 6. Truth table
-        truth_table = compute_truth_table(circuit)
+        try:
+            truth_table = compute_truth_table(circuit)
+        except Exception:
+            truth_table = []
 
     # ------------------------------------------------------------------
     # Display results

@@ -25,14 +25,14 @@ from vilm2ccg.hdl_generator import generate_verilog, _safe_id
 # ---------------------------------------------------------------------------
 
 _GATE_EVAL: dict[str, Any] = {
-    "and":  lambda ins: all(ins),
-    "or":   lambda ins: any(ins),
-    "not":  lambda ins: not ins[0],
-    "buf":  lambda ins: ins[0],
-    "nand": lambda ins: not all(ins),
-    "nor":  lambda ins: not any(ins),
-    "xor":  lambda ins: sum(ins) % 2 == 1,
-    "xnor": lambda ins: sum(ins) % 2 == 0,
+    "and":  lambda ins: all(ins) if ins else 0,
+    "or":   lambda ins: any(ins) if ins else 0,
+    "not":  lambda ins: not ins[0] if ins else 0,
+    "buf":  lambda ins: ins[0] if ins else 0,
+    "nand": lambda ins: (not all(ins)) if ins else 1,
+    "nor":  lambda ins: (not any(ins)) if ins else 1,
+    "xor":  lambda ins: sum(ins) % 2 == 1 if ins else 0,
+    "xnor": lambda ins: sum(ins) % 2 == 0 if ins else 1,
 }
 
 
