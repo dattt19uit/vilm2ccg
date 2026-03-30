@@ -38,17 +38,25 @@ with st.sidebar:
     st.title("⚙️ Cài đặt / Settings")
     st.markdown("---")
 
-    api_key = st.text_input(
-        "OpenAI API Key (tuỳ chọn / optional)",
-        type="password",
-        help="Để trống để sử dụng rule-based engine.",
+    st.markdown("#### 🖥️ LM Studio (local)")
+    lm_studio_url = st.text_input(
+        "LM Studio URL",
+        value=os.getenv("LM_STUDIO_URL", "http://localhost:1234/v1"),
+        help="Địa chỉ server LM Studio. Mặc định: http://localhost:1234/v1",
     )
-    model_choice = st.selectbox(
-        "Model",
-        ["gpt-3.5-turbo", "gpt-4", "gpt-4o", "greenmind"],
-        index=0,
+    lm_studio_model = st.text_input(
+        "Model name",
+        value=os.getenv("LM_STUDIO_MODEL", "local-model"),
+        help=(
+            "Tên model đang chạy trong LM Studio. "
+            "Dùng 'local-model' nếu chỉ có một model được load."
+        ),
     )
-    use_llm = st.checkbox("Sử dụng LLM", value=bool(api_key))
+    use_lm_studio = st.checkbox(
+        "Sử dụng LM Studio",
+        value=False,
+        help="Bật để gửi prompt tới LM Studio. Tắt để dùng rule-based engine.",
+    )
 
     st.markdown("---")
     st.markdown("**Ví dụ prompts / Example prompts:**")
@@ -98,11 +106,11 @@ if run_btn and prompt.strip():
         # 1. Parse intent
         intent = parse_vietnamese_prompt(prompt)
 
-        # 2. Build circuit (LLM or rule-based)
+        # 2. Build circuit (LM Studio or rule-based)
         llm = LLMInterface(
-            api_key=api_key if use_llm else "",
-            model=model_choice,
-            use_fallback=not use_llm,
+            base_url=lm_studio_url,
+            model=lm_studio_model,
+            use_fallback=not use_lm_studio,
         )
         circuit = llm.generate_circuit(prompt)
 

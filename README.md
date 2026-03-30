@@ -93,16 +93,47 @@ pytest tests/ -v
 
 ---
 
-## LLM integration
+## LM Studio integration (local LLM)
 
-Set environment variables to use an OpenAI-compatible LLM:
+ViLM2CCG uses [LM Studio](https://lmstudio.ai/) as the default local LLM backend.
+LM Studio exposes an OpenAI-compatible API on `http://localhost:1234/v1`.
+
+### Steps
+
+1. Download and install LM Studio from <https://lmstudio.ai/>.
+2. Load any instruction-following model (e.g. *Qwen2.5-7B-Instruct*, *Llama-3-8B-Instruct*, …).
+3. Start the local server inside LM Studio (**Local Server** tab → **Start Server**).
+4. Run the Streamlit dashboard and tick **Sử dụng LM Studio** in the sidebar.
+
+### Environment variables (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `LM_STUDIO_URL` | `http://localhost:1234/v1` | LM Studio server URL |
+| `LM_STUDIO_MODEL` | `local-model` | Model identifier shown in LM Studio |
 
 ```bash
-export OPENAI_API_KEY=sk-...
-export OPENAI_BASE_URL=https://api.openai.com/v1   # or GreenMind endpoint
+# Example – custom port or model name
+export LM_STUDIO_URL=http://localhost:8080/v1
+export LM_STUDIO_MODEL=qwen2.5-7b-instruct
+streamlit run app.py
 ```
 
-If no API key is provided, the rule-based engine handles prompt parsing automatically.
+### Programmatic usage
+
+```python
+from vilm2ccg.llm_interface import LLMInterface
+
+# Use LM Studio (local)
+llm = LLMInterface(
+    base_url="http://localhost:1234/v1",
+    model="local-model",   # or the exact model name shown in LM Studio
+    use_fallback=False,
+)
+circuit = llm.generate_circuit("Tạo mạch MUX 4-1")
+```
+
+If LM Studio is not running, set `use_fallback=True` (the default) to use the built-in rule-based engine instead.
 
 ---
 

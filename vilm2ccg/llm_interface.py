@@ -2,8 +2,11 @@
 llm_interface.py – LLM interface with Chain-of-Thought reasoning.
 
 Supports two backends:
-  1. OpenAI-compatible API  (set OPENAI_API_KEY / OPENAI_BASE_URL env vars)
-  2. Rule-based fallback    (always works, no API key required)
+  1. LM Studio (local)  – default; set LM_STUDIO_URL / LM_STUDIO_MODEL env vars
+                          or pass base_url / model to LLMInterface.
+                          LM Studio does not require a real API key.
+  2. Any OpenAI-compatible API – set OPENAI_API_KEY / OPENAI_BASE_URL env vars.
+  3. Rule-based fallback        – always works, no server required.
 
 The Chain-of-Thought prompt guides the model through:
   Step 1 – identify circuit type
@@ -21,6 +24,18 @@ from typing import Any
 
 from vilm2ccg.circuit_json import CircuitJSON, CircuitEdge, CircuitNode
 from vilm2ccg.input_module import ParsedIntent, parse_vietnamese_prompt
+
+
+# ---------------------------------------------------------------------------
+# Default LM Studio connection settings
+# ---------------------------------------------------------------------------
+
+# LM Studio listens on http://localhost:1234 by default.
+# Override with the LM_STUDIO_URL environment variable.
+_DEFAULT_LM_STUDIO_URL = "http://localhost:1234/v1"
+
+# LM Studio accepts any non-empty string as the API key.
+_LM_STUDIO_DUMMY_KEY = "lm-studio"
 
 
 # ---------------------------------------------------------------------------
@@ -60,20 +75,51 @@ Chỉ trả về JSON, không có giải thích thêm.
 
 
 class LLMInterface:
-    """Interface to a language model for circuit reasoning."""
+    """Interface to a language model for circuit reasoning.
+
+    By default the interface targets **LM Studio** running locally at
+    ``http://localhost:1234/v1``.  Pass *base_url* or set the
+    ``LM_STUDIO_URL`` environment variable to change the endpoint.  Set
+    ``LM_STUDIO_MODEL`` (or pass *model*) to select the loaded model –
+    LM Studio also accepts ``"local-model"`` as a generic alias when only
+    one model is loaded.
+
+    To use a remote OpenAI-compatible service instead, pass the appropriate
+    *base_url* and *api_key* (or set ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``).
+    """
 
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str | None = None,
-        model: str = "gpt-3.5-turbo",
+        model: str | None = None,
         use_fallback: bool = True,
     ) -> None:
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.model = model
+        # Resolve base URL: explicit arg > env LM_STUDIO_URL > env OPENAI_BASE_URL > LM Studio default
+        self.base_url = (
+            base_url
+            or os.getenv("LM_STUDIO_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or _DEFAULT_LM_STUDIO_URL
+        )
+
+        # Resolve API key: explicit arg > env OPENAI_API_KEY > LM Studio dummy key
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or _LM_STUDIO_DUMMY_KEY
+
+        # Resolve model: explicit arg > env LM_STUDIO_MODEL > "local-model" (LM Studio default)
+        self.model = model or os.getenv("LM_STUDIO_MODEL") or "local-model"
+
         self.use_fallback = use_fallback
         self._client: Any = None
+
+    # ------------------------------------------------------------------
+    # Whether a real LLM call should be attempted
+    # ------------------------------------------------------------------
+
+    @property
+    def _should_use_llm(self) -> bool:
+        """Return True when LM Studio (or another API) is configured."""
+        return not self.use_fallback
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -91,11 +137,12 @@ class LLMInterface:
     def generate_circuit(self, prompt: str) -> CircuitJSON:
         """Convert a Vietnamese prompt to a CircuitJSON object.
 
-        Attempts LLM API call first; falls back to rule-based generation.
+        Attempts an LM Studio (or compatible API) call when *use_fallback*
+        is ``False``; otherwise uses the built-in rule-based engine.
         """
         intent = parse_vietnamese_prompt(prompt)
 
-        if self.api_key and not self.use_fallback:
+        if not self.use_fallback:
             try:
                 return self._call_llm(prompt, intent)
             except Exception:  # noqa: BLE001
@@ -104,7 +151,7 @@ class LLMInterface:
         return build_circuit_from_intent(intent)
 
     def _call_llm(self, prompt: str, intent: ParsedIntent) -> CircuitJSON:
-        """Call the LLM API and parse the returned JSON."""
+        """Call the LLM API (LM Studio or compatible) and parse the returned JSON."""
         client = self._get_client()
         if client is None:
             raise RuntimeError("openai package not installed")
@@ -136,6 +183,7 @@ class LLMInterface:
             content = "\n".join(content.split("\n")[:-1])
 
         return CircuitJSON.from_json(content)
+
 
 
 # ---------------------------------------------------------------------------
